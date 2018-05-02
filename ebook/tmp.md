@@ -1,0 +1,29 @@
+**CollapseProject**
+
+上个一个规则是通过合并相邻的RepartitionOperator来减少计算过程中的重分区，提升计算效率。那么对于比RepartitionOperator更常见的Project操作，我们也可以通过类似的方式来去除冗余的映射操作。具体方式如下：
+
+1. 当一个Project节点的孩子节点也是Project算子，如果两个节点的project list中没有公共的不确定的表达式，则将父节点的project list替换成子节点的project list中相应的别名后，作为子节点的project list，并将父节点裁减掉。
+2. 当一个Project节点的孩子节点是Aggregate算子，如果父节点的project list和子节点的aggregate expression中没有公共的不确定的表达式，则将父节点的project list替换成子节点的aggregate expression中相应的别名后，作为子节点的aggregate expression，并将父节点裁减掉。
+
+**CollapseWindow**
+
+决定Window操作的三个元素分别是window expression、partition spec以及order spec，其中第一个决定输出，第二个和第三个决定数据的分布。如果相邻的两个Window算子有着相同的partition spec和order spec，那我们就可以两者合并，取它们的window expression合集作为新的Window操作的窗口表达式。
+
+**CombineFilters**
+
+当两个Filter算子相邻时，可以将其合并为一个Filter，减少虚函数的生成。对于两个相邻的Filter算子，如果两者的过滤条件完全相同，则裁减掉其中一个节点；如果两者的过滤条件中存在不相同的部分，则取两者的交集作为新的过滤条件生成新的Filter算子，替换掉原有的两个节点。
+
+**CombineLimits**
+
+当两个Limit算子相邻时，可以通过将它们合并在一起来减少不必要的数据扫描。具体策略如下:
+
+1. 如果父子节点是相邻的GlobalLimit时，取两者limit数值中较小的一方作为新GlobalLimit算子的limit表达式，替换原有的两个GlobalLimit算子。
+2. 如果父子节点是相邻的LocalLimit时，取两者limit数值中较小的一方作为新LocalLimit算子的limit表达式，替换原有的两个LocalLimit算子。
+3. 如果父子节点都是GlobalLimit和LocalLimit组合成的相邻算子，则取两者limit数值中较小的一方作为新的limit数值，并生成一个新的GlobalLimit和LocalLimit的组合算子，使用新的limit数值作为limit表达式，替换原有相邻的父子节点。
+
+一个例子如下：
+
+
+
+**CombineUnions**
+
