@@ -1,29 +1,38 @@
-**CollapseProject**
+**OptimizeIn**
 
-上个一个规则是通过合并相邻的RepartitionOperator来减少计算过程中的重分区，提升计算效率。那么对于比RepartitionOperator更常见的Project操作，我们也可以通过类似的方式来去除冗余的映射操作。具体方式如下：
+In操作的含义是判断一个值是否包含在一个表达式列表中，如果我们去看它的eval函数，会发现在具体的执行逻辑中，是遍历整个表达式进行是否包含的判断的：
 
-1. 当一个Project节点的孩子节点也是Project算子，如果两个节点的project list中没有公共的不确定的表达式，则将父节点的project list替换成子节点的project list中相应的别名后，作为子节点的project list，并将父节点裁减掉。
-2. 当一个Project节点的孩子节点是Aggregate算子，如果父节点的project list和子节点的aggregate expression中没有公共的不确定的表达式，则将父节点的project list替换成子节点的aggregate expression中相应的别名后，作为子节点的aggregate expression，并将父节点裁减掉。
+```scala
+    list.foreach { e =>
+      val v = e.eval(input)
+      if (v == null) {
+        hasNull = true
+      } else if (ordering.equiv(v, evaluatedValue)) {
+        return true
+      }
+    }
+```
 
-**CollapseWindow**
+从数据结构的角度来看，在列表较大时，循环遍历的效率肯定不如先将其转换为Set，使用分支判断取查找是否包含某个元素。本规则首先检查In的表达式列表中元素的类型是否都是字面值表达式，如果是，做以下操作：
 
-决定Window操作的三个元素分别是window expression、partition spec以及order spec，其中第一个决定输出，第二个和第三个决定数据的分布。如果相邻的两个Window算子有着相同的partition spec和order spec，那我们就可以两者合并，取它们的window expression合集作为新的Window操作的窗口表达式。
+1. 将表达式列表转换为表达式集合。
 
-**CombineFilters**
+2. 如果表达式集合内元素的个数超过某个阈值（由`spark.sql.optimizer.inSetConversionThreshold`参数决定，默认值为10），则将In节点转换为InSet节点：
 
-当两个Filter算子相邻时，可以将其合并为一个Filter，减少虚函数的生成。对于两个相邻的Filter算子，如果两者的过滤条件完全相同，则裁减掉其中一个节点；如果两者的过滤条件中存在不相同的部分，则取两者的交集作为新的过滤条件生成新的Filter算子，替换掉原有的两个节点。
+   ```scala
+   case class InSet(child: Expression, hset: Set[Any]) extends UnaryExpression with Predicate
+   ```
+   其中child即为In节点中的value，hset即为转换后的表达式集合。
 
-**CombineLimits**
-
-当两个Limit算子相邻时，可以通过将它们合并在一起来减少不必要的数据扫描。具体策略如下:
-
-1. 如果父子节点是相邻的GlobalLimit时，取两者limit数值中较小的一方作为新GlobalLimit算子的limit表达式，替换原有的两个GlobalLimit算子。
-2. 如果父子节点是相邻的LocalLimit时，取两者limit数值中较小的一方作为新LocalLimit算子的limit表达式，替换原有的两个LocalLimit算子。
-3. 如果父子节点都是GlobalLimit和LocalLimit组合成的相邻算子，则取两者limit数值中较小的一方作为新的limit数值，并生成一个新的GlobalLimit和LocalLimit的组合算子，使用新的limit数值作为limit表达式，替换原有相邻的父子节点。
+3. 如果表达式集合内元素的个数小于此阈值，并且小于原In节点中list内元素的个数，说明原In节点的list内有重复元素，使用去重后的列表代替原In节点的list表达式列表。
 
 一个例子如下：
 
+**ConstantFolding**
+
+在逻辑计划的表达式中，有一些表达式是可折叠的（foldable）.通本规则检测逻辑计划中的此类表达式，并且将它们进行折叠求值。一个例子如下：
+
+**ReorderAssociativeOperator**
 
 
-**CombineUnions**
 
