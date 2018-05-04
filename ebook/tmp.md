@@ -1,38 +1,34 @@
-**OptimizeIn**
+**LikeSimplification**
 
-In操作的含义是判断一个值是否包含在一个表达式列表中，如果我们去看它的eval函数，会发现在具体的执行逻辑中，是遍历整个表达式进行是否包含的判断的：
+LIKE是SQL中常见的操作，用于在WHERE子句中搜索列中的指定模式。使用的例子如下：
 
-```scala
-    list.foreach { e =>
-      val v = e.eval(input)
-      if (v == null) {
-        hasNull = true
-      } else if (ordering.equiv(v, evaluatedValue)) {
-        return true
-      }
-    }
+```sql
+-- 从Persons表中选取姓名以“A”为开头的记录
+SELECT * FROM Persons WHERE Name LIKE 'A%'
+
+-- 从Persons表中选取城市名称以“g”为结尾的记录
+SELECT * FROM Persons WHERE City LIKE '%g'
 ```
 
-从数据结构的角度来看，在列表较大时，循环遍历的效率肯定不如先将其转换为Set，使用分支判断取查找是否包含某个元素。本规则首先检查In的表达式列表中元素的类型是否都是字面值表达式，如果是，做以下操作：
+LIKE在Spark SQL逻辑计划中表示为：
 
-1. 将表达式列表转换为表达式集合。
+```scala
+case class Like(left: Expression, right: Expression) extends StringRegexExpression
+```
 
-2. 如果表达式集合内元素的个数超过某个阈值（由`spark.sql.optimizer.inSetConversionThreshold`参数决定，默认值为10），则将In节点转换为InSet节点：
+其中left表示被匹配的列明，right表示匹配的目标正则表达式。
 
-   ```scala
-   case class InSet(child: Expression, hset: Set[Any]) extends UnaryExpression with Predicate
-   ```
-   其中child即为In节点中的value，hset即为转换后的表达式集合。
+大家知道正则表达式匹配是比较耗时的操作，如果表中的每条记录都使用正则表达式取匹配的话，那计算速度就会变得很慢。本规则基于LIKE表达式中特定的匹配条件，将LIKE表达式进行适当转换，简化正则表达式匹配流程，提高计算效率。假设LIKE语句之后的模式为pattern，转换后的表达式为expr，它们的对应关系如下表所示：
 
-3. 如果表达式集合内元素的个数小于此阈值，并且小于原In节点中list内元素的个数，说明原In节点的list内有重复元素，使用去重后的列表代替原In节点的list表达式列表。
+| pattern               | expr                                               | 说明                                                         |
+| --------------------- | -------------------------------------------------- | ------------------------------------------------------------ |
+| `"([^_%]+)%"`         | StartsWith                                         | %放在模式最后，表示在特定列过滤以特定字符串开头的记录，使用StartsWith替代 |
+| `"%([^_%]+)"`         | EndsWith                                           | %放在模式最前，表示在特定列过滤以特定字符串结尾的记录，使用EndsWith替代 |
+| `"([^_%]+)%([^_%]+)"` | And(GreaterThanOrEqual, And(StartsWith, EndsWith)) | %放在模式中间，表示在特定列过滤以特定字符串s1开头且以特定字符串s2结尾的记录。使用三个表达式的And连接来表示，记录的长度必须大于等于s1和s2的长度之和，使用GreaterThanOrEqual表示；必须以s1开头，使用StartsWith表示；必须以s2结尾，使用EndsWith表示 |
+| `"%([^_%]+)%"`        | Contains                                           | %放在模式开头和结尾，表示在特定列过滤包含特定字符串的记录，使用Contains替代 |
+| `"([^_%]*)"`          | EqualTo                                            | 不包含%，表示在特定列中过滤与特定字符串相等的记录，使用EqualTo替代 |
 
 一个例子如下：
 
-**ConstantFolding**
-
-在逻辑计划的表达式中，有一些表达式是可折叠的（foldable）.通本规则检测逻辑计划中的此类表达式，并且将它们进行折叠求值。一个例子如下：
-
-**ReorderAssociativeOperator**
-
-
+**BooleanSimplification**
 
